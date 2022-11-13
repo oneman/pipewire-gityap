@@ -33,6 +33,7 @@
 #include <netinet/ip.h>
 #include <netinet/in.h>
 #include <net/if.h>
+#include <ifaddrs.h>
 #include <ctype.h>
 
 #include <spa/utils/hook.h>
@@ -430,7 +431,7 @@ static bool is_multicast(struct sockaddr *sa, socklen_t salen)
 
 static int make_socket(struct sockaddr_storage *src, socklen_t src_len,
 		struct sockaddr_storage *dst, socklen_t dst_len,
-		bool loop, int ttl)
+		bool loop, int ttl, char *ifname)
 {
 	int af, fd, val, res;
 
@@ -450,6 +451,46 @@ static int make_socket(struct sockaddr_storage *src, socklen_t src_len,
 		goto error;
 	}
 	if (is_multicast((struct sockaddr*)dst, dst_len)) {
+		if (ifname) {
+			struct ifaddrs *ifaddrs, *ifa;
+
+			if (getifaddrs(&ifaddrs) < 0)
+				pw_log_warn("getifaddrs failed: %m");
+			else {
+				for (ifa = ifaddrs; ifa; ifa = ifa->ifa_next) {
+					if (ifa->ifa_addr->sa_family == af && spa_streq(ifname, ifa->ifa_name) && ifa->ifa_addr) {
+						if (af == AF_INET6) {
+							char ipstr[INET6_ADDRSTRLEN];
+							inet_ntop(af, (struct sockaddr_in6*) ifa->ifa_addr, ipstr, INET6_ADDRSTRLEN);
+							pw_log_info("setting IPV6_MULTICAST_IF to %s", ipstr);
+							if (setsockopt(
+								fd,
+								IPPROTO_IPV6,
+								IPV6_MULTICAST_IF,
+								(struct sockaddr_in6*) ifa->ifa_addr,
+								sizeof((struct sockaddr_in6*) ifa->ifa_addr)
+							) < 0)
+								pw_log_warn("setsockopt(IPV6_MULTICAST_IF) failed: %m");
+						} else {
+							struct sockaddr_in *sa = (struct sockaddr_in*) ifa->ifa_addr;
+							pw_log_info("setting IP_MULTICAST_IF to %s", inet_ntoa(sa->sin_addr));
+							if (setsockopt(
+								fd,
+								IPPROTO_IP,
+								IP_MULTICAST_IF,
+								(struct sockaddr_in*) ifa->ifa_addr,
+								sizeof((struct sockaddr_in*) ifa->ifa_addr)
+							) < 0)
+								pw_log_warn("setsockopt(IP_MULTICAST_IF) failed: %m");
+						}
+						break;
+					}
+				}
+
+				freeifaddrs(ifaddrs);
+			}
+		}
+
 		val = loop;
 		if (setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &val, sizeof(val)) < 0)
 			pw_log_warn("setsockopt(IP_MULTICAST_LOOP) failed: %m");
@@ -518,9 +559,9 @@ static int setup_stream(struct impl *impl)
 		return res;
 
 
-	if ((fd = make_socket(&impl->src_addr, impl->src_len,
-					&impl->dst_addr, impl->dst_len,
-					impl->mcast_loop, impl->ttl)) < 0)
+	if ((fd = make_socket(&impl->src_addr, impl->src_len, &impl->dst_addr,
+				impl->dst_len, impl->mcast_loop,
+				impl->ttl, impl->ifname)) < 0)
 		return fd;
 
 	impl->rtp_fd = fd;
@@ -627,9 +668,9 @@ static int start_sap_announce(struct impl *impl)
 	int fd, res;
 	struct timespec value, interval;
 
-	if ((fd = make_socket(&impl->src_addr, impl->src_len,
-					&impl->sap_addr, impl->sap_len,
-					impl->mcast_loop, impl->ttl)) < 0)
+	if ((fd = make_socket(&impl->src_addr, impl->src_len, &impl->dst_addr,
+				impl->dst_len, impl->mcast_loop,
+				impl->ttl, impl->ifname)) < 0)
 		return fd;
 
 	impl->sap_fd = fd;
