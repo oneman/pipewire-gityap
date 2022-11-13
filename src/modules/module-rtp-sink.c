@@ -452,42 +452,20 @@ static int make_socket(struct sockaddr_storage *src, socklen_t src_len,
 	}
 	if (is_multicast((struct sockaddr*)dst, dst_len)) {
 		if (ifname) {
-			struct ifaddrs *ifaddrs, *ifa;
+			struct ip_mreqn mreqn;
+			mreqn.imr_ifindex = if_nametoindex(ifname);
 
-			if (getifaddrs(&ifaddrs) < 0)
-				pw_log_warn("getifaddrs failed: %m");
-			else {
-				for (ifa = ifaddrs; ifa; ifa = ifa->ifa_next) {
-					if (ifa->ifa_addr->sa_family == af && spa_streq(ifname, ifa->ifa_name) && ifa->ifa_addr) {
-						if (af == AF_INET6) {
-							char ipstr[INET6_ADDRSTRLEN];
-							inet_ntop(af, (struct sockaddr_in6*) ifa->ifa_addr, ipstr, INET6_ADDRSTRLEN);
-							pw_log_info("setting IPV6_MULTICAST_IF to %s", ipstr);
-							if (setsockopt(
-								fd,
-								IPPROTO_IPV6,
-								IPV6_MULTICAST_IF,
-								(struct sockaddr_in6*) ifa->ifa_addr,
-								sizeof((struct sockaddr_in6*) ifa->ifa_addr)
-							) < 0)
-								pw_log_warn("setsockopt(IPV6_MULTICAST_IF) failed: %m");
-						} else {
-							struct sockaddr_in *sa = (struct sockaddr_in*) ifa->ifa_addr;
-							pw_log_info("setting IP_MULTICAST_IF to %s", inet_ntoa(sa->sin_addr));
-							if (setsockopt(
-								fd,
-								IPPROTO_IP,
-								IP_MULTICAST_IF,
-								(struct sockaddr_in*) ifa->ifa_addr,
-								sizeof((struct sockaddr_in*) ifa->ifa_addr)
-							) < 0)
-								pw_log_warn("setsockopt(IP_MULTICAST_IF) failed: %m");
-						}
-						break;
-					}
-				}
-
-				freeifaddrs(ifaddrs);
+			if (mreqn.imr_ifindex) {
+				if (setsockopt(
+					fd,
+					af == AF_INET6 ? IPPROTO_IPV6 : IPPROTO_IP,
+					af == AF_INET6 ? IPV6_MULTICAST_IF : IP_MULTICAST_IF,
+					&mreqn,
+					sizeof(mreqn)
+				) < 0)
+					pw_log_warn("setsockopt(IP%s_MULTICAST_IF, %u (%s)) failed: %m", af == AF_INET6 ? "V6" : "", mreqn.imr_ifindex, ifname);
+			} else {
+				pw_log_warn("if_nametoindex(%s) failed: %m", ifname);
 			}
 		}
 

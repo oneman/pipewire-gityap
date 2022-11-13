@@ -416,6 +416,7 @@ on_rtp_io(void *data, int fd, uint32_t mask)
 					index / sess->info.stride,
 					expected_index / sess->info.stride);
 			index = expected_index;
+			// FIXME: recover after source changes its clock
 			filled = 0;
 		}
 
