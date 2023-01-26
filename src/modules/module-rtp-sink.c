@@ -646,8 +646,8 @@ static int start_sap_announce(struct impl *impl)
 	int fd, res;
 	struct timespec value, interval;
 
-	if ((fd = make_socket(&impl->src_addr, impl->src_len, &impl->dst_addr,
-				impl->dst_len, impl->mcast_loop,
+	if ((fd = make_socket(&impl->src_addr, impl->src_len, &impl->sap_addr,
+				impl->sap_len, impl->mcast_loop,
 				impl->ttl, impl->ifname)) < 0)
 		return fd;
 
