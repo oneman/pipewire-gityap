@@ -49,4 +49,28 @@ context.modules = [
             }
         }
     }
+    { name = libpipewire-module-rtp-sink
+        args = {
+            sap.ip = 239.255.255.255
+            destination.ip = 239.69.150.243
+            sap.port = 9875
+            sap.interval.sec = 15
+            local.ifname = eth0
+            sess.latency.msec = 10
+            # ptp.enabled = true
+            audio.format = "S24BE"
+            audio.rate = 48000
+            audio.channels = 8
+            sess.min-ptime = 1
+            sess.max-ptime = 4
+            net.loop = true
+            # ptp.offset.usecs = 0
+            stream.props = {
+               #node.name = "rtp-source"
+               media.class = "Audio/Sink"
+               node.virtual = false
+               device.api = aes67
+            }
+        }
+    }
 ]

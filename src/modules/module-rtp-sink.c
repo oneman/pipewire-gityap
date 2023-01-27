@@ -598,28 +598,62 @@ static void send_sap(struct impl *impl, bool bye)
 	spa_zero(dst_ttl);
 	if (is_multicast((struct sockaddr*)&impl->dst_addr, impl->dst_len))
 		snprintf(dst_ttl, sizeof(dst_ttl), "/%d", impl->ttl);
+// v=0
+// o=- 123456 123458 IN IP4 10.0.1.2
+// s=My sample flow
+// i=4 channels: c1, c2, c3, c4
+// t=0 0
+// a=recvonly
+// m=audio 5004 RTP/AVP 98
+// c=IN IP4 239.69.11.44/32
+// a=rtpmap:98 L24/48000/4
+// a=ptime:1
+// a=ts-refclk:ptp=IEEE1588-2008:00-11-22-FF-FE-33-44-55:0
+// a=mediaclk:direct=0
 
+// v=0
+// o=user 3883752059 0 IN IP4 0.0.0.0
+// s=PipeWire RTP Stream on host
+// i=2 channels: L, R
+// t=0 0
+// a=recvonly
+// a=tool:PipeWire 0.3.64
+// m=audio 46162 RTP/AVP 127
+// a=rtpmap:127 L24/48000/8
+// a=type:broadcast
+// a=ptime:2
+// a=ts-refclk:ptp=traceable
+// a=mediaclk:direct=0
 	snprintf(buffer, sizeof(buffer),
 			"v=0\n"
 			"o=%s %u 0 IN %s %s\n"
 			"s=%s\n"
-			"c=IN %s %s%s\n"
+			"i=8 channels: L, R, A, B, C, D, E, F\n"
 			"t=%u 0\n"
 			"a=recvonly\n"
 			"a=tool:PipeWire %s\n"
 			"m=audio %u RTP/AVP %i\n"
+			// "c=IN %s %s%s\n"
 			"a=rtpmap:%i %s/%u/%u\n"
 			"a=type:broadcast\n"
-			"a=ptime:%d\n",
+			"a=ptime:%d\n"
+		// local, ntp, gps are possible as well
+			"a=ts-refclk:ptp=traceable\n"
+			"a=mediaclk:direct=0\n",
+
 			user_name, impl->ntp, af, src_addr,
 			impl->session_name,
-			af, dst_addr, dst_ttl,
-			impl->ntp,
+			0/*impl->ntp*/,
 			pw_get_library_version(),
 			impl->port, impl->payload,
+			// af, dst_addr, dst_ttl,
+			// impl->ntp,
+			// impl->port, impl->payload,
 			impl->payload, impl->format_info->mime,
 			impl->info.rate, impl->info.channels,
 			(impl->pbytes / impl->frame_size) * 1000 / impl->info.rate);
+
+	pw_log_warn("posting SDP:\n%s", buffer);
 
 	iov[3].iov_base = buffer;
 	iov[3].iov_len = strlen(buffer);
