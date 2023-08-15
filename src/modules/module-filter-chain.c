@@ -680,6 +680,12 @@ struct impl {
 
 	long unsigned rate;
 
+	const char *vol_ctrls[SPA_AUDIO_MAX_CHANNELS];
+	bool volume_capture;
+	bool volume_playback;
+	float vol_0;
+	float vol_1;
+
 	struct graph graph;
 };
 
@@ -1082,7 +1088,7 @@ static void update_props_param(struct impl *impl)
 	spa_pod_dynamic_builder_clean(&b);
 }
 
-static void param_props_changed(struct impl *impl, const struct spa_pod *param)
+static void param_props_changed(struct impl *impl, const struct spa_pod *param, bool is_playback)
 {
 	struct spa_pod_object *obj = (struct spa_pod_object *) param;
 	const struct spa_pod_prop *prop;
@@ -1092,6 +1098,49 @@ static void param_props_changed(struct impl *impl, const struct spa_pod *param)
 	SPA_POD_OBJECT_FOREACH(obj, prop) {
 		if (prop->key == SPA_PROP_params)
 			changed += parse_params(graph, &prop->value);
+		else if (prop->key == SPA_PROP_channelVolumes) {
+			if (impl->vol_ctrls[0] == NULL ||
+					is_playback ? !impl->volume_playback : !impl->volume_capture)
+				continue;
+
+			uint32_t n_volumes;
+			float volumes[SPA_AUDIO_MAX_CHANNELS], soft_volumes[SPA_AUDIO_MAX_CHANNELS];
+
+			if ((n_volumes = spa_pod_copy_array(&prop->value, SPA_TYPE_Float,
+					volumes, SPA_AUDIO_MAX_CHANNELS)) > 0) {
+				struct node *def_node = spa_list_first(&graph->node_list, struct node, link);
+				for (uint32_t i = 0; i < n_volumes; i++) {
+					float volume = cbrt(volumes[i]);
+					const char *ctrl = impl->vol_ctrls[i];
+					float val = 0;
+					// FIXME: design the way overamplification should work
+					if (volume <= 1.0f)
+						val = volume * (impl->vol_1 - impl->vol_0) + impl->vol_0;
+					else
+						val = impl->vol_1;
+					set_control_value(def_node, ctrl, &val);
+					soft_volumes[i] = 1.0f;
+				}
+
+				changed++;
+			}
+
+			char buf[1024];
+			struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof(buf));
+			struct spa_pod_frame f[1];
+			spa_pod_builder_push_object(&b, &f[0], SPA_TYPE_OBJECT_Props, SPA_PARAM_Props);
+			spa_pod_builder_prop(&b, SPA_PROP_softVolumes, 0);
+			spa_pod_builder_array(&b, sizeof(float), SPA_TYPE_Float,
+					n_volumes, soft_volumes);
+			spa_pod_builder_raw_padded(&b, prop, SPA_POD_PROP_SIZE(prop));
+
+			param = spa_pod_builder_pop(&b, &f[0]);
+			pw_stream_set_param(
+				is_playback ? impl->playback : impl->capture,
+				SPA_PARAM_Props,
+				param
+			);
+		}
 	}
 	if (changed > 0) {
 		struct node *node;
@@ -1196,7 +1245,7 @@ static void io_changed(void *data, uint32_t id, void *area, uint32_t size)
 	}
 }
 
-static void param_changed(void *data, uint32_t id, const struct spa_pod *param)
+static void param_changed(void *data, uint32_t id, const struct spa_pod *param, bool is_playback)
 {
 	struct impl *impl = data;
 	struct graph *graph = &impl->graph;
@@ -1219,7 +1268,7 @@ static void param_changed(void *data, uint32_t id, const struct spa_pod *param)
 	}
 	case SPA_PARAM_Props:
 		if (param != NULL)
-			param_props_changed(impl, param);
+			param_props_changed(impl, param, is_playback);
 		break;
 	case SPA_PARAM_Latency:
 		param_latency_changed(impl, param);
@@ -1235,13 +1284,23 @@ error:
 			spa_strerror(res));
 }
 
+static void capture_param_changed(void *data, uint32_t id, const struct spa_pod *param)
+{
+	param_changed(data, id, param, false);
+}
+
+static void playback_param_changed(void *data, uint32_t id, const struct spa_pod *param)
+{
+	param_changed(data, id, param, true);
+}
+
 static const struct pw_stream_events in_stream_events = {
 	PW_VERSION_STREAM_EVENTS,
 	.destroy = capture_destroy,
 	.process = capture_process,
 	.io_changed = io_changed,
 	.state_changed = state_changed,
-	.param_changed = param_changed
+	.param_changed = capture_param_changed
 };
 
 static void playback_destroy(void *d)
@@ -1257,7 +1316,7 @@ static const struct pw_stream_events out_stream_events = {
 	.process = playback_process,
 	.io_changed = io_changed,
 	.state_changed = state_changed,
-	.param_changed = param_changed,
+	.param_changed = playback_param_changed,
 };
 
 static int setup_streams(struct impl *impl)
@@ -2490,6 +2549,8 @@ static void impl_destroy(struct impl *impl)
 	pw_properties_free(impl->capture_props);
 	pw_properties_free(impl->playback_props);
 	graph_free(&impl->graph);
+	for (uint32_t i = 0; i < SPA_AUDIO_MAX_CHANNELS; i++)
+		free((void *)impl->vol_ctrls[i]);
 	spa_list_consume(pl, &impl->plugin_func_list, link)
 		free_plugin_func(pl);
 	free(impl);
@@ -2679,6 +2740,59 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 	if (pw_properties_get(impl->playback_props, PW_KEY_MEDIA_NAME) == NULL)
 		pw_properties_setf(impl->playback_props, PW_KEY_MEDIA_NAME, "%s output",
 				pw_properties_get(impl->playback_props, PW_KEY_NODE_DESCRIPTION));
+
+	const char *pb_vol_ctrls = pw_properties_get(impl->playback_props, "filter.volume-controls");
+	const char *cap_vol_ctrls = pw_properties_get(impl->capture_props, "filter.volume-controls");
+	const char *vol_ctrls = NULL;
+	uint32_t channels = 0;
+	impl->volume_capture = false;
+	impl->volume_playback = false;
+	if (pb_vol_ctrls) {
+		vol_ctrls = pb_vol_ctrls;
+		channels = impl->playback_info.channels;
+		impl->volume_playback = true;
+	}
+	if (cap_vol_ctrls) {
+		vol_ctrls = cap_vol_ctrls;
+		channels = impl->capture_info.channels;
+		impl->volume_capture = true;
+	}
+	if (pb_vol_ctrls && cap_vol_ctrls)
+		pw_log_error("Ambiguous config: volume controls specified for both capture and playback");
+
+	if (vol_ctrls != NULL) {
+		struct spa_json it[2];
+		char v[256];
+		uint32_t i = 0;
+
+		spa_json_init(&it[0], vol_ctrls, strlen(vol_ctrls));
+		if (spa_json_enter_array(&it[0], &it[1]) <= 0)
+			spa_json_init(&it[1], vol_ctrls, strlen(vol_ctrls));
+
+		for (i = 0;; i++) {
+			if (spa_json_get_string(&it[1], v, sizeof(v)) <= 0)
+				break;
+			impl->vol_ctrls[i] = strdup(v);
+		}
+		if (i + 1 < channels) {
+			pw_log_error("\"filter.volume-controls\" property should have the same number of channels as the node");
+			impl->vol_ctrls[0] = NULL;
+		}
+	}
+
+	const char *vol_0 = pw_properties_get(
+		impl->volume_capture ? impl->capture_props : impl->playback_props,
+		"filter.volume-0"
+	);
+	if (vol_0)
+		impl->vol_0 = atof(vol_0);
+
+	const char *vol_1 = pw_properties_get(
+		impl->volume_capture ? impl->capture_props : impl->playback_props,
+		"filter.volume-1"
+	);
+	if (vol_1)
+		impl->vol_1 = atof(vol_1);
 
 	if ((res = load_graph(&impl->graph, props)) < 0) {
 		pw_log_error("can't load graph: %s", spa_strerror(res));
