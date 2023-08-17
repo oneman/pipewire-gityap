@@ -685,6 +685,7 @@ struct impl {
 	bool volume_playback;
 	float vol_0;
 	float vol_1;
+	float vol_10;
 
 	struct graph graph;
 };
@@ -1113,11 +1114,10 @@ static void param_props_changed(struct impl *impl, const struct spa_pod *param, 
 					float volume = cbrt(volumes[i]);
 					const char *ctrl = impl->vol_ctrls[i];
 					float val = 0;
-					// FIXME: design the way overamplification should work
 					if (volume <= 1.0f)
 						val = volume * (impl->vol_1 - impl->vol_0) + impl->vol_0;
 					else
-						val = impl->vol_1;
+						val = (volume - 1.0f) / cbrt(10.0f) * (impl->vol_10 - impl->vol_1) + impl->vol_1;
 					set_control_value(def_node, ctrl, &val);
 					soft_volumes[i] = 1.0f;
 				}
@@ -2793,6 +2793,15 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 	);
 	if (vol_1)
 		impl->vol_1 = atof(vol_1);
+
+	const char *vol_10 = pw_properties_get(
+		impl->volume_capture ? impl->capture_props : impl->playback_props,
+		"filter.volume-10"
+	);
+	if (vol_10)
+		impl->vol_10 = atof(vol_10);
+	else
+		impl->vol_10 = impl->vol_1;
 
 	if ((res = load_graph(&impl->graph, props)) < 0) {
 		pw_log_error("can't load graph: %s", spa_strerror(res));
