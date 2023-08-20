@@ -1119,7 +1119,12 @@ static void param_props_changed(struct impl *impl, const struct spa_pod *param, 
 					else
 						val = (volume - 1.0f) / cbrt(10.0f) * (impl->vol_10 - impl->vol_1) + impl->vol_1;
 					set_control_value(def_node, ctrl, &val);
-					soft_volumes[i] = 1.0f;
+
+					// Pass mute status through
+					if (volumes[i] == 0.0f)
+						soft_volumes[i] = 0.0f;
+					else
+						soft_volumes[i] = 1.0f;
 				}
 
 				changed++;
