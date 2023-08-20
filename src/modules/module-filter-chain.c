@@ -686,6 +686,7 @@ struct impl {
 	float vol_0;
 	float vol_1;
 	float vol_10;
+	bool muted;
 
 	struct graph graph;
 };
@@ -1095,6 +1096,9 @@ static void param_props_changed(struct impl *impl, const struct spa_pod *param, 
 	const struct spa_pod_prop *prop;
 	struct graph *graph = &impl->graph;
 	int changed = 0;
+	char buf[1024];
+	struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof(buf));
+	struct spa_pod_frame f[1];
 
 	SPA_POD_OBJECT_FOREACH(obj, prop) {
 		if (prop->key == SPA_PROP_params)
@@ -1121,22 +1125,55 @@ static void param_props_changed(struct impl *impl, const struct spa_pod *param, 
 					set_control_value(def_node, ctrl, &val);
 
 					// Pass mute status through
-					if (volumes[i] == 0.0f)
+					if (volumes[i] == 0.0f) {
 						soft_volumes[i] = 0.0f;
-					else
+						impl->muted = true;
+					}
+					else {
 						soft_volumes[i] = 1.0f;
+						impl->muted = false;
+					}
 				}
 
 				changed++;
 			}
 
-			char buf[1024];
-			struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof(buf));
-			struct spa_pod_frame f[1];
 			spa_pod_builder_push_object(&b, &f[0], SPA_TYPE_OBJECT_Props, SPA_PARAM_Props);
 			spa_pod_builder_prop(&b, SPA_PROP_softVolumes, 0);
 			spa_pod_builder_array(&b, sizeof(float), SPA_TYPE_Float,
 					n_volumes, soft_volumes);
+			spa_pod_builder_raw_padded(&b, prop, SPA_POD_PROP_SIZE(prop));
+
+			param = spa_pod_builder_pop(&b, &f[0]);
+			pw_stream_set_param(
+				is_playback ? impl->playback : impl->capture,
+				SPA_PARAM_Props,
+				param
+			);
+		} else if (prop->key == SPA_PROP_mute) {
+			if (impl->vol_ctrls[0] == NULL ||
+					is_playback ? !impl->volume_playback : !impl->volume_capture)
+				continue;
+
+			uint32_t channels = is_playback ?
+													impl->playback_info.channels :
+													impl->capture_info.channels;
+			float soft_volumes[SPA_AUDIO_MAX_CHANNELS];
+			bool mute = false;
+			if (spa_pod_get_bool(&prop->value, &mute) != 0)
+				continue;
+
+			for (uint32_t i = 0; i < channels; i++)
+				soft_volumes[i] = mute || impl->muted ? 0.0f : 1.0f;
+
+			spa_pod_builder_push_object(&b, &f[0], SPA_TYPE_OBJECT_Props, SPA_PARAM_Props);
+			spa_pod_builder_prop(&b, SPA_PROP_softVolumes, 0);
+			spa_pod_builder_array(&b, sizeof(float), SPA_TYPE_Float,
+					channels, soft_volumes);
+
+			spa_pod_builder_prop(&b, SPA_PROP_softMute, 0);
+			spa_pod_builder_bool(&b, mute);
+
 			spa_pod_builder_raw_padded(&b, prop, SPA_POD_PROP_SIZE(prop));
 
 			param = spa_pod_builder_pop(&b, &f[0]);
