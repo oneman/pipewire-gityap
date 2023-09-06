@@ -687,6 +687,7 @@ struct impl {
 	float vol_1;
 	float vol_10;
 	bool muted;
+	bool cubic_volume;
 
 	struct graph graph;
 };
@@ -1115,13 +1116,21 @@ static void param_props_changed(struct impl *impl, const struct spa_pod *param, 
 					volumes, SPA_AUDIO_MAX_CHANNELS)) > 0) {
 				struct node *def_node = spa_list_first(&graph->node_list, struct node, link);
 				for (uint32_t i = 0; i < n_volumes; i++) {
-					float volume = cbrt(volumes[i]);
+					float volume = volumes[i];
 					const char *ctrl = impl->vol_ctrls[i];
 					float val = 0;
-					if (volume <= 1.0f)
-						val = volume * (impl->vol_1 - impl->vol_0) + impl->vol_0;
-					else
-						val = (volume - 1.0f) / cbrt(10.0f) * (impl->vol_10 - impl->vol_1) + impl->vol_1;
+					if (impl->cubic_volume) {
+						volume = cbrt(volume);
+						if (volume <= 1.0f)
+							val = volume * (impl->vol_1 - impl->vol_0) + impl->vol_0;
+						else
+							val = (volume - 1.0f) / cbrt(10.0f) * (impl->vol_10 - impl->vol_1) + impl->vol_1;
+					} else {
+						if (volume <= 1.0f)
+							val = volume * (impl->vol_1 - impl->vol_0) + impl->vol_0;
+						else
+							val = (volume - 1.0f) / 9.0f * (impl->vol_10 - impl->vol_1) + impl->vol_1;
+					}
 					set_control_value(def_node, ctrl, &val);
 
 					// Pass mute status through
@@ -2844,6 +2853,13 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 		impl->vol_10 = atof(vol_10);
 	else
 		impl->vol_10 = impl->vol_1;
+
+	// Cubic scale for volume plugin controls
+	impl->cubic_volume = pw_properties_get_bool(
+		impl->volume_capture ? impl->capture_props : impl->playback_props,
+		"filter.cubic-volume",
+		true
+	);
 
 	if ((res = load_graph(&impl->graph, props)) < 0) {
 		pw_log_error("can't load graph: %s", spa_strerror(res));
