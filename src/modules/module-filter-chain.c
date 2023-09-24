@@ -686,7 +686,7 @@ struct impl {
 	float vol_0;
 	float vol_1;
 	float vol_10;
-	bool muted;
+	bool muted[SPA_AUDIO_MAX_CHANNELS];
 	bool cubic_volume;
 
 	struct graph graph;
@@ -1136,11 +1136,11 @@ static void param_props_changed(struct impl *impl, const struct spa_pod *param, 
 					// Pass mute status through
 					if (volumes[i] == 0.0f) {
 						soft_volumes[i] = 0.0f;
-						impl->muted = true;
+						impl->muted[i] = true;
 					}
 					else {
 						soft_volumes[i] = 1.0f;
-						impl->muted = false;
+						impl->muted[i] = false;
 					}
 				}
 
@@ -1173,7 +1173,7 @@ static void param_props_changed(struct impl *impl, const struct spa_pod *param, 
 				continue;
 
 			for (uint32_t i = 0; i < channels; i++)
-				soft_volumes[i] = mute || impl->muted ? 0.0f : 1.0f;
+				soft_volumes[i] = (mute || impl->muted[i]) ? 0.0f : 1.0f;
 
 			spa_pod_builder_push_object(&b, &f[0], SPA_TYPE_OBJECT_Props, SPA_PARAM_Props);
 			spa_pod_builder_prop(&b, SPA_PROP_softVolumes, 0);
